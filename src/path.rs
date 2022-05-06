@@ -4,13 +4,13 @@ use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct RenderablePath {
-    bgcolor: [f32; 4],
-    gradient_stops: u8,
-    gradient_pos: Option<Vec<f32>>,
-    gradient_colors: Option<Vec<[f32; 4]>>,
-    gradient_start: Option<(f32, f32)>,
-    gradient_end: Option<(f32, f32)>,
-    vertices: VertexBuffers<GpuVertex, u32>,
+    pub bgcolor: [f32; 4],
+    pub gradient_stops: u8,
+    pub gradient_pos: Option<Vec<f32>>,
+    pub gradient_colors: Option<Vec<[f32; 4]>>,
+    pub gradient_start: Option<(f32, f32)>,
+    pub gradient_end: Option<(f32, f32)>,
+    pub vertices: VertexBuffers<GpuVertex, u32>,
 }
 
 impl RenderablePath {
@@ -57,6 +57,6 @@ impl RenderablePath {
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct GpuVertex {
-    pub(super) position: [f32; 2],
-    pub(super) prim_id: u32,
+    pub position: [f32; 2],
+    pub prim_id: u32,
 }
