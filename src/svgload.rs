@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::convert::TryInto;
 
 use lyon::math::Point;
 use lyon::path::PathEvent;
 use lyon::tessellation::*;
+use rctree::NodeEdge;
 use usvg::{LinearGradient, NodeKind, Paint, Transform, Tree};
 use crate::path::{RenderablePath, GpuVertex};
 
@@ -18,13 +18,33 @@ pub fn load_svg(filename: &str) -> Vec<RenderablePath> {
     let mut gradients: HashMap<String, LinearGradient> = HashMap::new();
     let mut primitives : Vec<RenderablePath> = Vec::new();
 
-    for node in rtree.root().descendants() {
+    let mut size: (u32, u32) = (1,1);
+
+    let mut transforms = Vec::new();
+
+    for node_edge in rtree.root().traverse() {
+        let (start, node) = match node_edge {
+            NodeEdge::Start(x) => { (true, x) }
+            NodeEdge::End(x) => { (false, x) }
+        };
+
         let data = &*node.borrow();
+
         match data {
-            NodeKind::Svg(_) => {}
+            NodeKind::Svg(s) => {
+                if start {
+                    size = (s.size.width() as u32, s.size.height() as u32);
+                    let mut view = Transform::new_translate(-s.view_box.rect.x(), -s.view_box.rect.y());
+                    view.append(&Transform::new_scale(1.0 / s.view_box.rect.width(), -1.0 / s.view_box.rect.height()));
+                    view.f += 1.0;
+                    transforms.push(view);
+                }
+            }
             NodeKind::Defs => {}
             NodeKind::LinearGradient(gradient) => {
-                gradients.insert(gradient.id.clone(), gradient.clone());
+                if start {
+                    gradients.insert(gradient.id.clone(), gradient.clone());
+                }
             }
             NodeKind::RadialGradient(_) => {}
             NodeKind::ClipPath(_) => {}
@@ -32,66 +52,81 @@ pub fn load_svg(filename: &str) -> Vec<RenderablePath> {
             NodeKind::Pattern(_) => {}
             NodeKind::Filter(_) => {}
             NodeKind::Path(path) => {
-                let t = &data.transform();
-                let paint = &path.fill.as_ref().unwrap().paint;
-                let mut mesh: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
+                if start {
+                    let mut transform = Transform::default();
+                    for t in &transforms {
+                        transform.append(t);
+                    }
+                    transform.append(&data.transform());
+                    if path.fill.is_some() {
+                        let paint = &path.fill.as_ref().unwrap().paint;
+                        let mut mesh: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
 
-                fill_tess
-                    .tessellate(
-                        convert_path(&path),
-                        &FillOptions::tolerance(0.01),
-                        &mut BuffersBuilder::new(
-                            &mut mesh,
-                            VertexCtor {
-                                prim_id: primitives.len() as u32 - 1,
-                                transform: t.clone(),
-                            },
-                        ),
-                    )
-                    .expect("Error during tesselation!");
+                        fill_tess
+                            .tessellate(
+                                convert_path(&path),
+                                &FillOptions::tolerance(0.1),
+                                &mut BuffersBuilder::new(
+                                    &mut mesh,
+                                    VertexCtor {
+                                        prim_id: primitives.len() as u32,
+                                        transform: transform.clone(),
+                                    },
+                                ),
+                            )
+                            .expect("Error during tesselation!");
 
 
-                if (path.stroke.is_some()) {
-                    let mut mesh_s: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
-                    let stroke = path.stroke.as_ref().unwrap();
-                    let opts = convert_stroke(stroke);
-                    stroke_tess.tessellate(
-                        convert_path(path),
-                        &opts.with_tolerance(0.01),
-                        &mut BuffersBuilder::new(
-                            &mut mesh_s,
-                            VertexCtor {
-                                prim_id: primitives.len() as u32 - 1,
-                                transform: t.clone(),
-                            },
-                        ),
-                    );
+                        if path.stroke.is_some() {
+                            let mut mesh_s: VertexBuffers<GpuVertex, u32> = VertexBuffers::new();
+                            let stroke = path.stroke.as_ref().unwrap();
+                            let opts = convert_stroke(stroke);
+                            stroke_tess.tessellate(
+                                convert_path(path),
+                                &opts.with_tolerance(0.1),
+                                &mut BuffersBuilder::new(
+                                    &mut mesh_s,
+                                    VertexCtor {
+                                        prim_id: primitives.len() as u32,
+                                        transform: transform.clone(),
+                                    },
+                                ),
+                            ).expect("Error during tesselation stroke!");
 
-                    let stoke_p = primitive_from_paint(&mut gradients, stroke.opacity.value() as f32, mesh_s, &stroke.paint);
-                    primitives.push(stoke_p);
+                            let stoke_p = primitive_from_paint(&mut gradients, size.clone(), stroke.opacity.value() as f32, mesh_s, &stroke.paint, &transform);
+                            primitives.push(stoke_p);
+                        }
+
+                        let path = primitive_from_paint(&mut gradients, size.clone(), path.fill.as_ref().unwrap().opacity.value() as f32, mesh, paint, &transform);
+                        primitives.push(path);
+                    }
                 }
-
-                let path = primitive_from_paint(&mut gradients,  path.fill.as_ref().unwrap().opacity.value() as f32,mesh, paint);
-                primitives.push(path);
             }
             NodeKind::Image(_) => {}
-            NodeKind::Group(_) => {}
+            NodeKind::Group(g) => {
+                if start {
+                    transforms.push(g.transform);
+                } else {
+                    transforms.pop();
+                }
+            }
         }
     }
     primitives
 }
 
-fn primitive_from_paint(gradients: &mut HashMap<String, LinearGradient>, opacity: f32, mut mesh_s: VertexBuffers<GpuVertex, u32>, paint: &Paint) -> RenderablePath {
+fn primitive_from_paint(gradients: &mut HashMap<String, LinearGradient>, size: (u32, u32), opacity: f32, mesh_s: VertexBuffers<GpuVertex, u32>, paint: &Paint, transform: &Transform) -> RenderablePath {
     match paint {
         Paint::Color(col) => {
-            RenderablePath::fromColor(col, opacity,mesh_s)
+            RenderablePath::from_color(size, col, opacity, mesh_s)
         }
         Paint::Link(link) => {
             let grad = gradients.get(link);
+
             if grad.is_some() {
-                RenderablePath::fromGradient(grad.unwrap(), mesh_s)
+                RenderablePath::from_gradient(size, grad.unwrap(), mesh_s, transform)
             } else {
-                RenderablePath::new(mesh_s)
+                RenderablePath::new(size,mesh_s)
             }
         }
     }
@@ -115,8 +150,10 @@ impl FillVertexConstructor<GpuVertex> for VertexCtor {
 
 impl StrokeVertexConstructor<GpuVertex> for VertexCtor {
     fn new_vertex(&mut self, vertex: StrokeVertex) -> GpuVertex {
+        let position = vertex.position().to_array();
+        let vec = self.transform.apply(position[0] as f64, position[1] as f64);
         GpuVertex {
-            position: vertex.position().to_array(),
+            position: [vec.0 as f32, vec.1 as f32],
             prim_id: self.prim_id,
         }
     }
@@ -238,7 +275,7 @@ pub fn convert_stroke(s: &usvg::Stroke) -> StrokeOptions {
         usvg::LineJoin::Round => LineJoin::Round,
     };
 
-    StrokeOptions::tolerance(0.01)
+    StrokeOptions::tolerance(0.1)
         .with_line_width(s.width.value() as f32)
         .with_line_cap(linecap)
         .with_line_join(linejoin)

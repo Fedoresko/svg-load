@@ -8,4 +8,6 @@ edition = "2021"
 [dependencies]
 serde = { version = "1.0.104", features = ["derive"] }
 lyon = { version=">=0.17.0", features = ["serialization"] }
+rctree = ">=0.4.0"
+ttf-parser = ">=0.15.0"
 usvg = ">=0.15.0"

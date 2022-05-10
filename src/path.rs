@@ -1,9 +1,10 @@
 use lyon::tessellation::VertexBuffers;
-use usvg::{Color, LinearGradient};
+use usvg::{Color, LinearGradient, Transform};
 use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct RenderablePath {
+    pub size: (u32, u32),
     pub bgcolor: [f32; 4],
     pub gradient_stops: u8,
     pub gradient_pos: Option<Vec<f32>>,
@@ -14,8 +15,9 @@ pub struct RenderablePath {
 }
 
 impl RenderablePath {
-    pub fn fromColor(col: &Color, opacity: f32, mesh: VertexBuffers<GpuVertex, u32>) -> Self {
+    pub fn from_color(size: (u32, u32), col: &Color, opacity: f32, mesh: VertexBuffers<GpuVertex, u32>) -> Self {
         RenderablePath {
+            size,
             bgcolor: [col.red as f32 / 256.0, col.green as f32 / 256.0, col.blue as f32 / 256.0, opacity],
             gradient_stops: 0,
             gradient_colors: None,
@@ -26,12 +28,14 @@ impl RenderablePath {
         }
     }
 
-    pub fn fromGradient(g: &LinearGradient, mesh: VertexBuffers<GpuVertex, u32>) -> Self {
+    pub fn from_gradient(size: (u32, u32), g: &LinearGradient, mesh: VertexBuffers<GpuVertex, u32>, transform: &Transform) -> Self {
         let n = g.stops.len();
-        let t = g.transform;
+        let mut t = g.transform.clone();
+        t.append(transform);
         let start = t.apply(g.x1, g.y1);
         let end = t.apply(g.x2, g.y2);
         RenderablePath {
+            size,
             bgcolor: [1.0, 1.0, 1.0, 1.0],
             gradient_stops: n as u8,
             gradient_colors: Some(g.stops.iter().map(|s| [s.color.red as f32 / 256.0, s.color.green as f32 / 256.0, s.color.blue as f32 / 256.0, s.opacity.value() as f32]).collect()),
@@ -42,8 +46,9 @@ impl RenderablePath {
         }
     }
 
-    pub fn new(mesh: VertexBuffers<GpuVertex, u32>) -> Self {
+    pub fn new(size: (u32, u32), mesh: VertexBuffers<GpuVertex, u32>) -> Self {
         RenderablePath {
+            size,
             bgcolor: [1.0, 1.0, 1.0, 1.0],
             gradient_stops: 0,
             gradient_colors: None,
